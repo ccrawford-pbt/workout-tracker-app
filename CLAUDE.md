@@ -103,13 +103,17 @@ only showed up under a specific sequence of actions:
      weights permanently invisible — exactly the bug rule 2 exists to
      prevent.
 
-### Auto-advance
+### Day rotation (auto-advance)
 
-`nextDayNumber()` only advances the 1→2→3→1 rotation once the most
-recently touched session is fully checked. An incomplete day keeps being
-suggested across app opens — even across calendar days. This is an
-explicit user request; don't change it to "advance once per day" without
-asking.
+Any date with no logged session pre-loads the day after the most
+recently logged workout in the 1→2→3→1 rotation, **complete or not** —
+D1 logged Monday means D2 is suggested at the next gym visit, whatever
+date that lands on. A date whose own session is in progress keeps
+showing that session's day. History: this originally advanced only once
+every exercise was checked ("incomplete day keeps being suggested"),
+also at explicit user request; the user reversed it in Aug 2026 because
+a skipped machine kept the same day pinned forever. Don't switch back
+without asking.
 
 ### Day-pill switching resets checks — intentional, not a bug
 
@@ -160,9 +164,10 @@ was reverted; the real bug was the lookup-exclusion granularity (rule 3).
 ## Testing
 
 `test/test-standalone.js` drives `index.html` through real Chromium via
-Playwright — 29 assertions covering fresh-load rendering, the zero-check
+Playwright — 31 assertions covering fresh-load rendering, the zero-check
 rule, weight drafts, cross-day-slot lookup, weigh-in math, reload
-persistence, auto-advance, a simulated-broken-storage run (localStorage
+persistence, day rotation (including multi-day advancement under a fake
+clock), a simulated-broken-storage run (localStorage
 replaced with a throwing getter before page scripts run), day-rollover
 behavior under a fake clock (`page.clock`) — resume-after-days, preserved
 past-date selection, the midnight interval check — and GitHub sync

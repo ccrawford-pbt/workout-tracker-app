@@ -887,14 +887,6 @@
     return n;
   }
 
-  function isSessionComplete(session, dayNumber) {
-    var workout = WORKOUTS[dayNumber];
-    if (!workout) return false;
-    return workout.exercises.every(function (ex) {
-      return !!session.checks[ex.name];
-    });
-  }
-
   // Finds the most recent weight logged for a specific exercise, searching
   // backward across ALL sessions (any day, any date) — not just today's day
   // number. This is what lets "Seated Leg Curl" on Day 3 show the weight you
@@ -944,23 +936,24 @@
     return null;
   }
 
-  // Looks at the most recently touched day and only advances to the next day
-  // in rotation once that day's exercises are ALL checked. An incomplete day
-  // keeps being suggested across multiple app opens until it's finished.
+  // Suggests the day-slot for a date with no logged session yet: one step
+  // past the most recently logged workout in the 1→2→3→1 rotation,
+  // complete or not — doing D1 on Monday pre-loads D2 for the next gym
+  // visit, whatever date that lands on. A date whose own session is in
+  // progress keeps showing that session's day (callers use the session's
+  // dayNumber directly when one exists).
+  //
+  // History: this originally advanced only once every exercise was
+  // checked ("an incomplete day keeps being suggested"). Reversed by user
+  // request Aug 2026 — a skipped machine kept the same day pinned forever.
   function nextDayNumber(sessions) {
     var entries = Object.keys(sessions)
       .filter(function (d) { return checkedCount(sessions[d]) > 0; })
-      .sort(function (a, b) { return a < b ? 1 : a > b ? -1 : 0; })
-      .map(function (d) { return [d, sessions[d]]; });
+      .sort(function (a, b) { return a < b ? 1 : a > b ? -1 : 0; });
 
     if (entries.length === 0) return 1;
 
-    var lastSession = entries[0][1];
-    var lastDay = lastSession.dayNumber;
-
-    if (!isSessionComplete(lastSession, lastDay)) {
-      return lastDay;
-    }
+    var lastDay = sessions[entries[0]].dayNumber;
     return lastDay >= 3 ? 1 : lastDay + 1;
   }
 

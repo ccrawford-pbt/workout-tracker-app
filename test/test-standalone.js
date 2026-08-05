@@ -287,17 +287,22 @@ async function main() {
   );
   await goTab(page, "Today");
 
-  console.log("\nAuto-advance (incomplete day keeps being suggested)");
-  // Today's Day 3 session has only Leg Press checked → incomplete. A date
-  // with no session (yesterday) must still suggest Day 3, not advance.
+  console.log("\nDay rotation (advances from the last logged workout)");
+  // Today's Day 3 session has only Leg Press checked — incomplete, but the
+  // rotation still moves on: a fresh date suggests the NEXT day (3 wraps
+  // to 1). Completion is not required to advance.
   await page.$$eval(".date-chip", (els) => els[5].click()); // yesterday
   assert(
-    "17. incomplete last session keeps suggesting the same day (D3)",
-    (await activeDayPill(page)) === "D3"
+    "17. a fresh date suggests the day after the last logged one (D3→D1, incomplete)",
+    (await activeDayPill(page)) === "D1"
   );
   await page.$$eval(".date-chip", (els) => els[6].click()); // back to today
+  assert(
+    "18. a date with a session in progress keeps showing that session's day",
+    (await activeDayPill(page)) === "D3" && (await progressBadge(page)) === "1/7"
+  );
 
-  // Complete every Day 3 exercise, then a fresh date must advance 3 → 1.
+  // Completion styling still works.
   const day3Rest = [
     "Warm-Up",
     "Chest Press Machine",
@@ -310,14 +315,9 @@ async function main() {
     await clickCheckbox(page, name, false);
   }
   assert(
-    "18. all boxes checked shows 7/7 with done styling",
+    "19. all boxes checked shows 7/7 with done styling",
     (await progressBadge(page)) === "7/7" &&
       (await page.$(".progress-badge-done")) !== null
-  );
-  await page.$$eval(".date-chip", (els) => els[5].click()); // yesterday again
-  assert(
-    "19. completed Day 3 advances the rotation to Day 1",
-    (await activeDayPill(page)) === "D1"
   );
 
   await context.close();
@@ -533,6 +533,30 @@ async function main() {
         "1"
   );
   await pullContext.close();
+
+  // ---------- Rotation across calendar days (fake clock) ----------
+  // The exact user scenario: D1 logged Monday (even partially) → the next
+  // gym day pre-loads D2, then D3, regardless of schedule or completion.
+  console.log("\nRotation across calendar days");
+  const rotContext = await browser.newContext();
+  const rotPage = await rotContext.newPage();
+  await rotPage.clock.install({ time: new Date("2026-03-09T12:00:00") }); // a Monday
+  await rotPage.goto(PAGE_URL);
+  await clickCheckbox(rotPage, "Warm-Up", false); // partial D1, nothing else
+  await rotPage.clock.setFixedTime(new Date("2026-03-10T12:00:00"));
+  await rotPage.evaluate(() => window.dispatchEvent(new Event("pageshow")));
+  assert(
+    "30. partial D1 on Monday → Tuesday pre-loads D2",
+    (await activeDayPill(rotPage)) === "D2"
+  );
+  await clickCheckbox(rotPage, "Chest Press Machine", false); // partial D2
+  await rotPage.clock.setFixedTime(new Date("2026-03-12T12:00:00")); // skip a day
+  await rotPage.evaluate(() => window.dispatchEvent(new Event("pageshow")));
+  assert(
+    "31. partial D2 → next visit (a day skipped) pre-loads D3",
+    (await activeDayPill(rotPage)) === "D3"
+  );
+  await rotContext.close();
 
   await browser.close();
 
