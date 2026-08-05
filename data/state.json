@@ -1,0 +1,25 @@
+{
+  "sessions": {
+    "2026-08-03": {
+      "weights": {
+        "Leg Press": 340
+      },
+      "dayNumber": 1,
+      "checks": {
+        "Warm-Up": true,
+        "Leg Press": true,
+        "Leg Extension": true,
+        "Seated Leg Curl": true,
+        "Hip Abductor/Adductor": true,
+        "Calf Raise": true
+      },
+      "effort": 7,
+      "notes": ""
+    }
+  },
+  "weighIns": {
+    "2026-08-05": 251.2
+  },
+  "weightDrafts": {},
+  "updatedAt": 1785948837815
+}
