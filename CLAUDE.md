@@ -146,6 +146,16 @@ was reverted; the real bug was the lookup-exclusion granularity (rule 3).
    `todayISO()`/the date strip previously used `toISOString()` (UTC),
    which is tomorrow's date every evening in US timezones; both now use
    local-timezone dates via `toISODate()`.
+7. **Header sat under the iPhone status bar** (untappable Save button).
+   `black-translucent` status-bar style extends the page under the status
+   bar in home-screen mode; `.header` pads past it with
+   `env(safe-area-inset-top)`. Don't remove that padding — it looks
+   redundant in a desktop browser where the inset is 0.
+8. **iOS zoomed the page when focusing inputs.** Safari auto-zooms any
+   focused input with font-size < 16px; this UI is deliberately dense
+   (13px inputs). Fixed with `maximum-scale=1` in the viewport meta,
+   which iOS ignores for user pinch-zoom (since iOS 10) but honors for
+   the focus auto-zoom. Don't "clean up" the viewport tag.
 
 ## Testing
 

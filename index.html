@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<!-- maximum-scale=1 stops iOS Safari's auto-zoom when focusing inputs
+     under 16px (this UI is deliberately dense). Since iOS 10 Safari
+     ignores the cap for user pinch-zoom, so accessibility is unaffected. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Rourke" />
@@ -36,7 +39,10 @@
   }
 
   .header {
-    padding: 20px 20px 14px;
+    /* black-translucent status bar means the page extends UNDER the
+       iPhone status bar in home-screen mode — pad past it or the header
+       (and its Save button) sits beneath the clock/battery, untappable. */
+    padding: calc(20px + env(safe-area-inset-top, 0px)) 20px 14px;
     border-bottom: 1px solid #24272E;
   }
   .header-top {
@@ -1400,7 +1406,6 @@
         type: "number",
         inputmode: "decimal",
         className: "weight-input",
-        placeholder: "lb",
         value: currentWeight != null ? String(currentWeight) : "",
         "aria-label": "Weight for " + ex.name
       });
