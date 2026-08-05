@@ -49,10 +49,13 @@ function assert(name, condition, detail) {
   }
 }
 
+// Local-timezone date, matching the app's own todayISO() — toISOString()
+// would be UTC and disagree with the app every evening in western timezones.
 function isoDaysAgo(n) {
   const d = new Date();
   d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
+  const pad = (x) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 async function readStorage(page) {
@@ -351,6 +354,54 @@ async function main() {
     brokenPageError === null && (await progressBadge(brokenPage)) === "1/7"
   );
   await brokenContext.close();
+
+  // ---------- Day-rollover suite: fake clock, no reloads ----------
+  // As an iOS home-screen app the page gets suspended and resumed for days
+  // without reloading. "Today" must follow the calendar on wake (pageshow /
+  // focus / visibilitychange) and on the minute-interval midnight check.
+  console.log("\nDay rollover without reload");
+  const clockContext = await browser.newContext();
+  const clockPage = await clockContext.newPage();
+  await clockPage.clock.install({ time: new Date("2026-03-10T12:00:00") });
+  await clockPage.goto(PAGE_URL);
+
+  const activeChipNum = () =>
+    clockPage.$eval(".date-chip-active .date-chip-num", (el) => el.textContent);
+  const chipNums = () =>
+    clockPage.$$eval(".date-chip .date-chip-num", (els) =>
+      els.map((e) => e.textContent)
+    );
+
+  assert("22. app opens on the (faked) current day", (await activeChipNum()) === "10");
+
+  // Suspend for two days, then resume — the wake events must move "today".
+  await clockPage.clock.setFixedTime(new Date("2026-03-12T12:00:00"));
+  await clockPage.evaluate(() => window.dispatchEvent(new Event("pageshow")));
+  assert(
+    "23. resuming after two days advances today and the date strip",
+    (await activeChipNum()) === "12" && (await chipNums())[6] === "12"
+  );
+
+  // A deliberately selected past date must NOT be yanked forward on wake —
+  // but the strip itself still shifts.
+  await clockPage.$$eval(".date-chip", (els) => els[5].click()); // Mar 11
+  await clockPage.clock.setFixedTime(new Date("2026-03-13T12:00:00"));
+  await clockPage.evaluate(() => window.dispatchEvent(new Event("pageshow")));
+  assert(
+    "24. wake keeps a deliberately selected past date, strip still shifts",
+    (await activeChipNum()) === "11" && (await chipNums())[6] === "13"
+  );
+
+  // Midnight rollover while the app is open, no wake event at all: the
+  // minute-interval check must catch it. Re-select the current today first.
+  await clockPage.$$eval(".date-chip", (els) => els[6].click()); // Mar 13
+  await clockPage.clock.setSystemTime(new Date("2026-03-13T23:59:30"));
+  await clockPage.clock.runFor("02:00"); // cross midnight, fire the interval
+  assert(
+    "25. minute interval catches a midnight rollover while open",
+    (await activeChipNum()) === "14" && (await chipNums())[6] === "14"
+  );
+  await clockContext.close();
 
   await browser.close();
 

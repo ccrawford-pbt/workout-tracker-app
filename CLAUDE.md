@@ -119,14 +119,26 @@ was reverted; the real bug was the lookup-exclusion granularity (rule 3).
    which context is affected: raw `file://`, the GitHub Pages `https://`
    URL, or the saved home-screen PWA — they are three different execution
    contexts.
+6. **"Today" was frozen at page-load time.** As a home-screen app the page
+   is suspended and resumed for days without reloading, so the app was
+   stuck on whatever date it last launched. `checkDayRollover()` now
+   re-checks the calendar on `pageshow`/`focus`/`visibilitychange` and on
+   a one-minute interval (midnight rollover while open). It follows the
+   calendar forward only if the user was sitting on the old "today" — a
+   deliberately selected past date is left alone. Related:
+   `todayISO()`/the date strip previously used `toISOString()` (UTC),
+   which is tomorrow's date every evening in US timezones; both now use
+   local-timezone dates via `toISODate()`.
 
 ## Testing
 
 `test/test-standalone.js` drives `index.html` through real Chromium via
-Playwright — 21 assertions covering fresh-load rendering, the zero-check
+Playwright — 25 assertions covering fresh-load rendering, the zero-check
 rule, weight drafts, cross-day-slot lookup, weigh-in math, reload
-persistence, auto-advance, and a simulated-broken-storage run (localStorage
-replaced with a throwing getter before page scripts run).
+persistence, auto-advance, a simulated-broken-storage run (localStorage
+replaced with a throwing getter before page scripts run), and day-rollover
+behavior under a fake clock (`page.clock`) — resume-after-days, preserved
+past-date selection, and the midnight interval check.
 
 ```
 node test/test-standalone.js

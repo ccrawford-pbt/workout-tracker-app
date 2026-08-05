@@ -717,8 +717,15 @@
 
   // ---------- Helpers (data / state — same rules as the artifact version) ----------
 
+  // Local-timezone ISO date. Never use toISOString() for "what day is it" —
+  // that's UTC, which is tomorrow's date every evening in US timezones.
+  function toISODate(d) {
+    function pad(n) { return n < 10 ? "0" + n : String(n); }
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+  }
+
   function todayISO() {
-    return new Date().toISOString().slice(0, 10);
+    return toISODate(new Date());
   }
 
   // Some WebKit contexts restrict localStorage under file:// origins more
@@ -926,6 +933,25 @@
   var selectedDate = todayISO();
   var viewDay = (state.sessions[selectedDate] || { dayNumber: nextDayNumber(state.sessions) }).dayNumber;
 
+  // "Today" is captured once at script load, but as an iOS home-screen app
+  // this page gets suspended and resumed for days without ever reloading —
+  // so the calendar must be re-checked every time the app wakes (pageshow /
+  // focus / visibilitychange) and once a minute for midnight rollovers
+  // while it's open. If the user was sitting on the old "today", follow the
+  // calendar forward; if they had deliberately selected a past date, keep
+  // their selection and just re-render so the date strip shifts.
+  var currentToday = todayISO();
+  function checkDayRollover() {
+    var now = todayISO();
+    if (now === currentToday) return;
+    if (selectedDate === currentToday) {
+      selectedDate = now;
+      viewDay = (state.sessions[now] || { dayNumber: nextDayNumber(state.sessions) }).dayNumber;
+    }
+    currentToday = now;
+    render();
+  }
+
   function persist() {
     saveState(state);
   }
@@ -1014,7 +1040,7 @@
     for (var i = 6; i >= 0; i--) {
       var d = new Date(today);
       d.setDate(today.getDate() - i);
-      days.push(d.toISOString().slice(0, 10));
+      days.push(toISODate(d));
     }
 
     var chips = days.map(function (iso) {
@@ -1520,6 +1546,13 @@
 
     content.scrollTop = scrollTop;
   }
+
+  window.addEventListener("pageshow", checkDayRollover);
+  window.addEventListener("focus", checkDayRollover);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) checkDayRollover();
+  });
+  setInterval(checkDayRollover, 60 * 1000);
 
   render();
 })();
