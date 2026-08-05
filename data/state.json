@@ -15,11 +15,33 @@
       },
       "effort": 7,
       "notes": ""
+    },
+    "2026-08-05": {
+      "dayNumber": 2,
+      "checks": {
+        "Warm-Up": true,
+        "Chest Press Machine": true,
+        "Lat Pulldown": true,
+        "Shoulder Press Machine": true,
+        "Seated Row Machine": true,
+        "Assisted Dip / Tricep Pushdown": true,
+        "Bicep Curl Machine": true
+      },
+      "weights": {
+        "Chest Press Machine": 115,
+        "Lat Pulldown": 130,
+        "Shoulder Press Machine": 80,
+        "Seated Row Machine": 195,
+        "Assisted Dip / Tricep Pushdown": 135,
+        "Bicep Curl Machine": 115
+      },
+      "effort": 8,
+      "notes": ""
     }
   },
   "weighIns": {
     "2026-08-05": 251.2
   },
   "weightDrafts": {},
-  "updatedAt": 1785948837815
+  "updatedAt": 1785964658021
 }
