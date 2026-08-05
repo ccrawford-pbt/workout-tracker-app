@@ -51,11 +51,28 @@ updates. Consequences:
     }
   },
   weighIns: { "<ISO date>": <number in lb> },
-  weightDrafts: { "<ISO date>": { "<exercise name>": <number> } }
+  weightDrafts: { "<ISO date>": { "<exercise name>": <number> } },
+  updatedAt: <ms epoch of last local mutation>   // drives sync conflict rule
 }
 ```
 
 Persisted to `localStorage` under `"rourke-tracker-v1"`.
+
+### GitHub sync (the repo is the backup store)
+
+The header Save button commits the whole state as `data/state.json` to
+`main` via the GitHub Contents API. Auth is a fine-grained PAT (Contents
+read & write, scoped to this one repo) pasted once per device in the
+History tab's SYNC section and stored under `"rourke-tracker-gh-token"`
+in localStorage — never inside the synced file. On launch the app pulls
+the remote copy and adopts it only if its `updatedAt` is newer than
+local (last-writer-wins; fine for a single user). All sync is
+best-effort: any network failure leaves the app fully working offline —
+gym connectivity is flaky and must never block logging. Reads go through
+the API, not the Pages URL (Pages lags each commit by a deploy cycle).
+Caveats: the repo is public, so `data/state.json` is publicly readable
+(the SYNC section says so on-screen), and every save is a commit to
+`main`, which triggers a harmless Pages rebuild.
 
 ### The three non-obvious rules (do not "simplify" these away)
 
@@ -133,12 +150,15 @@ was reverted; the real bug was the lookup-exclusion granularity (rule 3).
 ## Testing
 
 `test/test-standalone.js` drives `index.html` through real Chromium via
-Playwright — 25 assertions covering fresh-load rendering, the zero-check
+Playwright — 29 assertions covering fresh-load rendering, the zero-check
 rule, weight drafts, cross-day-slot lookup, weigh-in math, reload
 persistence, auto-advance, a simulated-broken-storage run (localStorage
-replaced with a throwing getter before page scripts run), and day-rollover
+replaced with a throwing getter before page scripts run), day-rollover
 behavior under a fake clock (`page.clock`) — resume-after-days, preserved
-past-date selection, and the midnight interval check.
+past-date selection, the midnight interval check — and GitHub sync
+against a fully mocked `api.github.com` (`context.route`): token setup,
+the PUT save path, dirty-state tracking, and newer-remote adoption on
+launch.
 
 ```
 node test/test-standalone.js

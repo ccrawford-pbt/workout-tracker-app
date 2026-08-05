@@ -70,6 +70,66 @@
     color: #F5F6F7;
   }
 
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .save-btn {
+    font-family: 'SF Mono', 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: #5FB582;
+    border: 1px solid #2E4A3A;
+    background: #14201A;
+    padding: 2px 10px;
+    border-radius: 3px;
+  }
+  .save-btn-error {
+    color: #E39A66;
+    border-color: #4A3319;
+    background: #241A12;
+  }
+  .save-btn-muted {
+    color: #8B93A1;
+    border-color: #2C303A;
+    background: #1D2027;
+  }
+
+  .sync-note {
+    font-size: 12px;
+    color: #7D8493;
+    line-height: 1.5;
+    margin: 0 0 10px;
+  }
+  .sync-row {
+    display: flex;
+    gap: 8px;
+  }
+  .sync-token-input { flex: 1; }
+  .sync-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .sync-btn {
+    background: #24272E;
+    color: #EDEEF0;
+    border: 1px solid #2C303A;
+    border-radius: 7px;
+    padding: 9px 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .sync-btn-danger { color: #E39A66; }
+  .sync-status-line {
+    font-family: 'SF Mono', 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    color: #7D8493;
+    margin-top: 10px;
+  }
+  .sync-error { color: #E39A66; }
+
   .storage-warning {
     margin-top: 10px;
     background: #241A12;
@@ -715,6 +775,17 @@
   var START_WEIGHT = 250;
   var GOAL_WEIGHT = 190;
 
+  // GitHub sync: the repo itself is the backup store. Saves commit
+  // data/state.json to main via the Contents API, authorized by a
+  // fine-grained PAT (Contents read/write on this one repo) that lives
+  // only in this device's localStorage — never in the synced file.
+  var SYNC_OWNER = "ccrawford-pbt";
+  var SYNC_REPO = "workout-tracker-app";
+  var SYNC_PATH = "data/state.json";
+  var SYNC_BRANCH = "main";
+  var SYNC_TOKEN_KEY = "rourke-tracker-gh-token";
+  var SYNC_API = "https://api.github.com/repos/" + SYNC_OWNER + "/" + SYNC_REPO + "/contents/" + SYNC_PATH;
+
   // ---------- Helpers (data / state — same rules as the artifact version) ----------
 
   // Local-timezone ISO date. Never use toISOString() for "what day is it" —
@@ -726,6 +797,15 @@
 
   function todayISO() {
     return toISODate(new Date());
+  }
+
+  // Unicode-safe base64 (notes can contain non-ASCII). GitHub's API both
+  // expects and returns base64 file content; responses may contain newlines.
+  function b64encode(str) {
+    return btoa(unescape(encodeURIComponent(str)));
+  }
+  function b64decode(b64) {
+    return decodeURIComponent(escape(atob(b64.replace(/\s/g, ""))));
   }
 
   // Some WebKit contexts restrict localStorage under file:// origins more
@@ -747,28 +827,34 @@
     }
   })();
 
+  // Shared by loadState() and the GitHub pull path, so remote data gets
+  // the exact same shape-hardening as locally persisted data.
+  function normalizeState(parsed) {
+    var sessions = {};
+    var srcSessions = (parsed && parsed.sessions) || {};
+    for (var date in srcSessions) {
+      if (Object.prototype.hasOwnProperty.call(srcSessions, date)) {
+        sessions[date] = Object.assign({ weights: {} }, srcSessions[date]);
+      }
+    }
+    return {
+      sessions: sessions,
+      weighIns: (parsed && parsed.weighIns) || {},
+      weightDrafts: (parsed && parsed.weightDrafts) || {},
+      updatedAt: (parsed && parsed.updatedAt) || 0
+    };
+  }
+
   function loadState() {
     if (!storageAvailable) {
-      return { sessions: {}, weighIns: {}, weightDrafts: {} };
+      return normalizeState(null);
     }
     try {
       var raw = window.localStorage.getItem(STORAGE_KEY);
       if (!raw) throw new Error("empty");
-      var parsed = JSON.parse(raw);
-      var sessions = {};
-      var srcSessions = parsed.sessions || {};
-      for (var date in srcSessions) {
-        if (Object.prototype.hasOwnProperty.call(srcSessions, date)) {
-          sessions[date] = Object.assign({ weights: {} }, srcSessions[date]);
-        }
-      }
-      return {
-        sessions: sessions,
-        weighIns: parsed.weighIns || {},
-        weightDrafts: parsed.weightDrafts || {}
-      };
+      return normalizeState(JSON.parse(raw));
     } catch (e) {
-      return { sessions: {}, weighIns: {}, weightDrafts: {} };
+      return normalizeState(null);
     }
   }
 
@@ -952,7 +1038,129 @@
     render();
   }
 
+  // ---------- GitHub sync ----------
+
+  var syncToken = null;
+  if (storageAvailable) {
+    try { syncToken = window.localStorage.getItem(SYNC_TOKEN_KEY); } catch (e) {}
+  }
+  var syncStatus = "idle";      // "idle" | "saving" | "error"
+  var syncDirty = false;        // local changes not yet committed to GitHub
+  var syncLastSaved = null;     // ms epoch of last successful save/pull
+  var syncError = null;
+
+  function setSyncToken(token) {
+    syncToken = token || null;
+    if (storageAvailable) {
+      try {
+        if (token) window.localStorage.setItem(SYNC_TOKEN_KEY, token);
+        else window.localStorage.removeItem(SYNC_TOKEN_KEY);
+      } catch (e) {}
+    }
+    syncStatus = "idle";
+    syncError = null;
+    render();
+  }
+
+  function ghHeaders() {
+    return {
+      "Authorization": "Bearer " + syncToken,
+      "Accept": "application/vnd.github+json"
+    };
+  }
+
+  // Returns the file object ({sha, content, ...}) or null if it doesn't
+  // exist yet. Reads go through the API, never the Pages URL — Pages lags
+  // each commit by a deploy cycle.
+  function ghGetFile() {
+    return fetch(SYNC_API + "?ref=" + SYNC_BRANCH, { headers: ghHeaders() }).then(function (res) {
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error("GitHub read failed (" + res.status + ")");
+      return res.json();
+    });
+  }
+
+  function saveToGitHub() {
+    if (!syncToken) { setTab("history"); return; }
+    if (syncStatus === "saving") return;
+    syncStatus = "saving";
+    syncError = null;
+    render();
+
+    var payload = JSON.stringify(state, null, 2);
+    function put(sha) {
+      var body = {
+        message: "Sync workout data (" + todayISO() + ")",
+        content: b64encode(payload),
+        branch: SYNC_BRANCH
+      };
+      if (sha) body.sha = sha;
+      return fetch(SYNC_API, {
+        method: "PUT",
+        headers: Object.assign({ "Content-Type": "application/json" }, ghHeaders()),
+        body: JSON.stringify(body)
+      });
+    }
+
+    ghGetFile()
+      .then(function (file) { return put(file && file.sha); })
+      .then(function (res) {
+        if (res.status === 409) {
+          // sha went stale between read and write — refresh and retry once
+          return ghGetFile().then(function (file) { return put(file && file.sha); });
+        }
+        return res;
+      })
+      .then(function (res) {
+        if (!res.ok) {
+          if (res.status === 401 || res.status === 403) {
+            throw new Error("GitHub rejected the token — check its scope and expiry");
+          }
+          throw new Error("GitHub save failed (" + res.status + ")");
+        }
+        syncStatus = "idle";
+        syncDirty = false;
+        syncLastSaved = Date.now();
+        render();
+      })
+      .catch(function (err) {
+        syncStatus = "error";
+        syncError = (err && err.message ? err.message : "Network error") +
+          " — your log is still saved on this device.";
+        render();
+      });
+  }
+
+  // Adopt the GitHub copy when it's newer than local (multi-device case),
+  // or unconditionally when force=true. Resolves true if remote data was
+  // adopted, false otherwise. Callers treat failures as non-fatal: the
+  // app must stay fully usable offline (gym connectivity is flaky).
+  function pullFromGitHub(force) {
+    if (!syncToken) return Promise.resolve(false);
+    return ghGetFile().then(function (file) {
+      if (!file || !file.content) return false;
+      var remote;
+      try {
+        remote = normalizeState(JSON.parse(b64decode(file.content)));
+      } catch (e) {
+        throw new Error("Data file on GitHub is not valid JSON");
+      }
+      if (!force && remote.updatedAt <= (state.updatedAt || 0)) return false;
+      state = remote;
+      saveState(state);
+      viewDay = (state.sessions[selectedDate] || { dayNumber: nextDayNumber(state.sessions) }).dayNumber;
+      syncStatus = "idle";
+      syncDirty = false;
+      syncLastSaved = Date.now();
+      syncError = null;
+      render();
+      return true;
+    });
+  }
+
   function persist() {
+    state.updatedAt = Date.now();
+    syncDirty = true;
     saveState(state);
   }
 
@@ -1022,11 +1230,37 @@
 
   // ---------- Render: Header ----------
 
+  function renderSaveButton() {
+    var text, cls = "save-btn";
+    if (!syncToken) {
+      text = "Set up sync";
+      cls += " save-btn-muted";
+    } else if (syncStatus === "saving") {
+      text = "Saving…";
+    } else if (syncStatus === "error") {
+      text = "Save ✗";
+      cls += " save-btn-error";
+    } else if (!syncDirty && syncLastSaved) {
+      text = "Saved ✓";
+    } else {
+      text = "Save";
+    }
+    return el("button", {
+      className: cls,
+      text: text,
+      "aria-label": syncToken ? "Save to GitHub" : "Set up GitHub sync",
+      onClick: saveToGitHub
+    });
+  }
+
   function renderHeader() {
     return el("header", { className: "header" }, [
       el("div", { className: "header-top" }, [
         el("span", { className: "eyebrow", text: "COACH ROURKE" }),
-        el("span", { className: "phase-tag", text: "PHASE 1" })
+        el("div", { className: "header-actions" }, [
+          renderSaveButton(),
+          el("span", { className: "phase-tag", text: "PHASE 1" })
+        ])
       ]),
       el("h1", { className: "title", text: "Weeks 1–4" })
     ]);
@@ -1496,7 +1730,85 @@
       el("span", { className: "section-label", text: "SESSION LOG" })
     ].concat(sessionChildren)));
 
+    children.push(renderSyncSection());
+
     return el("div", { className: "tab-panel" }, children);
+  }
+
+  function renderSyncSection() {
+    var kids = [el("span", { className: "section-label", text: "SYNC — GITHUB" })];
+
+    if (!syncToken) {
+      kids.push(el("p", {
+        className: "sync-note",
+        text: "Back your log up to the GitHub repo so it survives this phone and browser. " +
+          "Create a fine-grained personal access token with Contents read & write on " +
+          SYNC_OWNER + "/" + SYNC_REPO + " only, then paste it below. " +
+          "The token is stored only on this device."
+      }));
+      var tokenInput = el("input", {
+        type: "password",
+        className: "entry-date sync-token-input",
+        placeholder: "github_pat_…",
+        "aria-label": "GitHub personal access token"
+      });
+      kids.push(el("div", { className: "sync-row" }, [
+        tokenInput,
+        el("button", {
+          className: "entry-submit sync-token-save",
+          text: "Save token",
+          onClick: function () {
+            var v = tokenInput.value.trim();
+            if (v) setSyncToken(v);
+          }
+        })
+      ]));
+    } else {
+      kids.push(el("p", {
+        className: "sync-note",
+        text: "Save commits data/state.json to GitHub; the app also loads the newest copy on launch. " +
+          "Heads up: the repo is public, so the data file is publicly readable."
+      }));
+      kids.push(el("div", { className: "sync-actions" }, [
+        el("button", { className: "sync-btn", text: "Save to GitHub", onClick: saveToGitHub }),
+        el("button", {
+          className: "sync-btn",
+          text: "Load from GitHub",
+          onClick: function () {
+            if (syncDirty && !window.confirm("Replace unsaved local changes with the GitHub copy?")) return;
+            syncError = null;
+            pullFromGitHub(true)
+              .then(function (found) {
+                if (!found) {
+                  syncError = "No data file on GitHub yet — save first.";
+                  render();
+                }
+              })
+              .catch(function (err) {
+                syncError = (err && err.message) || "Network error";
+                render();
+              });
+          }
+        }),
+        el("button", {
+          className: "sync-btn sync-btn-danger",
+          text: "Remove token",
+          onClick: function () {
+            if (window.confirm("Remove the GitHub token from this device?")) setSyncToken(null);
+          }
+        })
+      ]));
+      if (syncError) {
+        kids.push(el("div", { className: "sync-status-line sync-error", text: syncError }));
+      } else if (syncLastSaved) {
+        kids.push(el("div", {
+          className: "sync-status-line",
+          text: "Last synced " + new Date(syncLastSaved).toLocaleTimeString()
+        }));
+      }
+    }
+
+    return el("section", { className: "history-block sync-block" }, kids);
   }
 
   // ---------- Render: Tab bar ----------
@@ -1555,6 +1867,10 @@
   setInterval(checkDayRollover, 60 * 1000);
 
   render();
+
+  // Best-effort: adopt a newer GitHub copy after first paint (multi-device).
+  // Failures are swallowed — offline at the gym must never break the app.
+  pullFromGitHub(false).catch(function () {});
 })();
 </script>
 </body>

@@ -403,6 +403,137 @@ async function main() {
   );
   await clockContext.close();
 
+  // ---------- GitHub sync suite: api.github.com fully mocked ----------
+  console.log("\nGitHub sync (mocked API)");
+  const CORS_HEADERS = {
+    "access-control-allow-origin": "*",
+    "access-control-allow-headers": "authorization, content-type, accept",
+    "access-control-allow-methods": "GET, PUT, OPTIONS",
+  };
+  const API_FILE_URL =
+    "https://api.github.com/repos/ccrawford-pbt/workout-tracker-app/contents/data/state.json";
+
+  // Save path: no remote file yet (GET → 404), PUT captured and inspected.
+  const syncContext = await browser.newContext();
+  let putRequest = null;
+  await syncContext.route("https://api.github.com/**", (route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS") {
+      return route.fulfill({ status: 204, headers: CORS_HEADERS });
+    }
+    if (req.method() === "GET") {
+      return route.fulfill({
+        status: 404,
+        headers: CORS_HEADERS,
+        contentType: "application/json",
+        body: '{"message":"Not Found"}',
+      });
+    }
+    if (req.method() === "PUT") {
+      putRequest = {
+        url: req.url(),
+        auth: req.headers()["authorization"],
+        body: JSON.parse(req.postData()),
+      };
+      return route.fulfill({
+        status: 201,
+        headers: CORS_HEADERS,
+        contentType: "application/json",
+        body: '{"content":{"sha":"abc123"}}',
+      });
+    }
+    return route.fulfill({ status: 500, headers: CORS_HEADERS, body: "{}" });
+  });
+  const syncPage = await syncContext.newPage();
+  await syncPage.goto(PAGE_URL);
+
+  await syncPage.click(".save-btn"); // no token yet → jumps to sync setup
+  assert(
+    "26. save button without a token opens the sync setup",
+    (await syncPage.$(".sync-token-input")) !== null
+  );
+
+  await syncPage.fill(".sync-token-input", "github_pat_TEST");
+  await syncPage.click(".sync-token-save");
+  await goTab(syncPage, "Today");
+  await clickCheckbox(syncPage, "Leg Press", false);
+  await syncPage.click(".save-btn");
+  await syncPage.waitForFunction(() =>
+    document.querySelector(".save-btn").textContent.includes("Saved")
+  );
+  {
+    const sentState = JSON.parse(
+      Buffer.from(putRequest.body.content, "base64").toString("utf8")
+    );
+    assert(
+      "27. Save commits state to data/state.json with the token",
+      putRequest.url.startsWith(API_FILE_URL) &&
+        putRequest.auth === "Bearer github_pat_TEST" &&
+        putRequest.body.branch === "main" &&
+        putRequest.body.sha === undefined && // 404 → create, no sha
+        sentState.sessions[today].checks["Leg Press"] === true,
+      JSON.stringify({ url: putRequest.url, auth: putRequest.auth })
+    );
+  }
+  await clickCheckbox(syncPage, "Leg Extension", false);
+  assert(
+    "28. a new change flips the button back from Saved to Save",
+    (await syncPage.$eval(".save-btn", (el) => el.textContent)) === "Save"
+  );
+  await syncContext.close();
+
+  // Pull path: remote file exists and is newer → adopted on launch.
+  const pullContext = await browser.newContext();
+  const remoteState = {
+    updatedAt: 9999999999999,
+    sessions: {
+      "2026-01-05": {
+        dayNumber: 2,
+        checks: { "Lat Pulldown": true },
+        weights: {},
+        effort: 8,
+        notes: "from another device",
+      },
+    },
+    weighIns: { "2026-01-05": 244 },
+    weightDrafts: {},
+  };
+  await pullContext.route("https://api.github.com/**", (route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS") {
+      return route.fulfill({ status: 204, headers: CORS_HEADERS });
+    }
+    return route.fulfill({
+      status: 200,
+      headers: CORS_HEADERS,
+      contentType: "application/json",
+      body: JSON.stringify({
+        sha: "def456",
+        content: Buffer.from(JSON.stringify(remoteState)).toString("base64"),
+      }),
+    });
+  });
+  const pullPage = await pullContext.newPage();
+  await pullPage.addInitScript(() =>
+    window.localStorage.setItem("rourke-tracker-gh-token", "github_pat_TEST")
+  );
+  await pullPage.goto(PAGE_URL);
+  await pullPage.waitForFunction(() => {
+    const s = JSON.parse(
+      window.localStorage.getItem("rourke-tracker-v1") || "{}"
+    );
+    return s.sessions && Object.keys(s.sessions).length === 1;
+  });
+  await goTab(pullPage, "History");
+  assert(
+    "29. newer remote data is adopted on launch",
+    (await pullPage.$eval(".session-completion", (el) => el.textContent)) ===
+      "1/7 done" &&
+      (await pullPage.$$eval(".stat-value", (els) => els[0].textContent)) ===
+        "1"
+  );
+  await pullContext.close();
+
   await browser.close();
 
   console.log(`\n${passed} passed, ${failed} failed`);
